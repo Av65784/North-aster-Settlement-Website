@@ -2,11 +2,9 @@ import { LogOut, Sparkles, Trophy, Zap } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { AiSidebar } from "./AiSidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
-import { canAccessAdmin } from "../utils/permissions.js";
 
 export function AppShell({ children }) {
-  const { isFirebaseConfigured, logout, profile, user } = useAuth();
-  const showAdmin = canAccessAdmin(profile, user?.email);
+  const { isFirebaseConfigured, logout, profile, isAdmin } = useAuth();
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-950">
@@ -53,7 +51,7 @@ export function AppShell({ children }) {
               <Trophy size={16} />
               Leaderboard
             </NavLink>
-            {showAdmin ? (
+            {isAdmin ? (
               <NavLink
                 to="/admin"
                 className={({ isActive }) =>

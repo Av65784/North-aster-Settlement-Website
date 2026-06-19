@@ -8,16 +8,16 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db, isFirebaseConfigured } from "../config/firebase.js";
-import { resolveRole } from "../utils/permissions.js";
+import { subscribeAdminRecord } from "../services/adminAuthService.js";
+import { ROLES, canAccessAdmin } from "../utils/permissions.js";
 
 const AuthContext = createContext(null);
 
 function createUserProfile(user, name) {
-  const role = resolveRole(null, user.email);
   return {
     name: name || user.displayName || "LockOn Learner",
     email: user.email,
-    role,
+    role: ROLES.USER,
     xp: 0,
     energy: 0,
     totalScore: 0,
@@ -46,14 +46,12 @@ async function ensureUserDocument(user, name) {
   const energy = typeof data.energy === "number" ? data.energy : 0;
 
   if (!data.name) patch.name = name || user.displayName || "LockOn Learner";
-  if (!data.email) patch.email = user.email;
   if (typeof data.xp !== "number") patch.xp = 0;
   if (typeof data.energy !== "number") patch.energy = 0;
   if (typeof data.totalScore !== "number") patch.totalScore = xp + energy * 100;
   if (!Array.isArray(data.completedTests)) patch.completedTests = [];
   if (!Array.isArray(data.completedUnits)) patch.completedUnits = [];
   if (!("lastTestAttempt" in data)) patch.lastTestAttempt = null;
-  if (!data.role) patch.role = resolveRole(data, user.email);
 
   if (Object.keys(patch).length) {
     patch.updatedAt = serverTimestamp();
@@ -64,6 +62,7 @@ async function ensureUserDocument(user, name) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [adminRecord, setAdminRecord] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -73,27 +72,51 @@ export function AuthProvider({ children }) {
     }
 
     return onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
       if (firebaseUser) {
-        await ensureUserDocument(firebaseUser);
+        try {
+          await ensureUserDocument(firebaseUser);
+        } catch (error) {
+          console.error("Failed to sync user profile:", error);
+        }
       } else {
         setProfile(null);
+        setAdminRecord(null);
       }
+      setUser(firebaseUser);
       setLoading(false);
     });
   }, []);
 
   useEffect(() => {
     if (!user || !db) return undefined;
-    return onSnapshot(doc(db, "users", user.uid), (snapshot) => {
-      setProfile(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
-    });
+    return onSnapshot(
+      doc(db, "users", user.uid),
+      (snapshot) => {
+        setProfile(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
+      },
+      (error) => {
+        console.error("Profile listener error:", error);
+        setProfile(null);
+      },
+    );
   }, [user]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setAdminRecord(null);
+      return undefined;
+    }
+    return subscribeAdminRecord(user.uid, setAdminRecord);
+  }, [user?.uid]);
+
+  const isAdmin = canAccessAdmin(adminRecord);
 
   const value = useMemo(
     () => ({
       user,
       profile,
+      adminRecord,
+      isAdmin,
       loading,
       isFirebaseConfigured,
       async login(email, password) {
@@ -108,7 +131,7 @@ export function AuthProvider({ children }) {
       },
       logout: () => (auth ? signOut(auth) : undefined),
     }),
-    [loading, profile, user],
+    [adminRecord, isAdmin, loading, profile, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

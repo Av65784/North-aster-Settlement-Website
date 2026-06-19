@@ -7,7 +7,6 @@ import { ForgePage } from "./pages/ForgePage.jsx";
 import { LandingPage } from "./pages/LandingPage.jsx";
 import { LeaderboardPage } from "./pages/LeaderboardPage.jsx";
 import { LoginPage } from "./pages/LoginPage.jsx";
-import { canAccessAdmin } from "./utils/permissions.js";
 
 function LoadingScreen() {
   return (
@@ -26,11 +25,11 @@ function ProtectedRoute({ children }) {
 }
 
 function AdminRoute({ children }) {
-  const { isFirebaseConfigured, loading, user, profile } = useAuth();
+  const { isFirebaseConfigured, loading, user, isAdmin } = useAuth();
   if (loading) return <LoadingScreen />;
   if (!isFirebaseConfigured) return <Navigate to="/login" replace />;
   if (!user) return <Navigate to="/login" replace />;
-  if (!canAccessAdmin(profile, user.email)) return <Navigate to="/app" replace />;
+  if (!isAdmin) return <Navigate to="/app" replace />;
   return <AppShell>{children}</AppShell>;
 }
 
@@ -64,7 +63,7 @@ export default function App() {
         }
       />
       <Route
-        path="/admin"
+        path="/admin/*"
         element={
           <AdminRoute>
             <AdminPage />

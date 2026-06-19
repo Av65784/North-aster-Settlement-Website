@@ -10,12 +10,25 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
 
-    function userDoc(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data;
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true;
     }
 
-    function isAdmin() {
-      return signedIn() && userDoc(request.auth.uid).role == 'admin';
+    function ownerProfileUpdate() {
+      return ownsUserDoc(userId)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'email',
+          'createdAt',
+          'role',
+          'moderationNotes'
+        ]);
+    }
+
+    match /adminUsers/{adminId} {
+      allow read: if signedIn() && request.auth.uid == adminId;
+      allow write: if isAdmin();
     }
 
     match /users/{userId} {
@@ -25,13 +38,7 @@ service cloud.firestore {
         && request.resource.data.energy == 0
         && request.resource.data.totalScore == 0
         && (request.resource.data.role == 'user' || request.resource.data.role == 'admin');
-      allow update: if ownsUserDoc(userId)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'email',
-          'createdAt',
-          'role'
-        ])
-        || isAdmin();
+      allow update: if isAdmin() || ownerProfileUpdate();
       allow delete: if false;
 
       match /subjects/{docId} {
@@ -65,6 +72,53 @@ service cloud.firestore {
       match /forgeSources/{docId} {
         allow read, write: if ownsUserDoc(userId) || isAdmin();
       }
+    }
+
+    match /classrooms/{classroomId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /classroomMembers/{memberId} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /mockTests/{testId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /mockAssignments/{assignmentId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /submissions/{submissionId} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    match /questionBank/{questionId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /xpTransactions/{transactionId} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /energyTransactions/{transactionId} {
+      allow read: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
     }
   }
 }
