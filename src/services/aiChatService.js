@@ -1,4 +1,4 @@
-import { callGeminiJson } from "./geminiService.js";
+import { forgeAssistantChat as forgeAssistantChatFn } from "./aiFunctionsService.js";
 import { getForgeContext } from "./forgeService.js";
 
 function summarizeForgeStructure(subjects) {
@@ -25,24 +25,6 @@ function summarizeForgeStructure(subjects) {
 export async function askForgeAssistant(uid, messages) {
   const { subjects, sourceText } = await getForgeContext(uid);
   const structureSummary = summarizeForgeStructure(subjects);
-  const conversation = messages
-    .map((message) => `${message.role === "user" ? "Student" : "Assistant"}: ${message.content}`)
-    .join("\n");
-
-  const prompt = `You are LockOn Revision's AI study assistant.
-Answer using the student's uploaded study material and generated Forge learning structure whenever possible.
-Be concise, encouraging, and focused on active recall.
-
-Generated learning structure:
-${structureSummary}
-
-Uploaded study material (excerpt):
-${sourceText.slice(0, 80000) || "No source text stored yet."}
-
-Conversation:
-${conversation}
-
-Return strict JSON only: {"reply":"your response here"}`;
 
   const fallback = {
     reply: subjects.length
@@ -50,5 +32,10 @@ Return strict JSON only: {"reply":"your response here"}`;
       : "Upload notes in Forge first so I can answer with your study material context.",
   };
 
-  return callGeminiJson(prompt, fallback);
+  try {
+    return await forgeAssistantChatFn(messages, structureSummary, sourceText);
+  } catch (error) {
+    console.warn("Cloud Function failed, using fallback:", error);
+    return fallback;
+  }
 }

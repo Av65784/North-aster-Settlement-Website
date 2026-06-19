@@ -16,52 +16,12 @@ import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import { db, functions, isFirebaseConfigured, storage } from "../config/firebase.js";
 import { getLocalUser, makeId, subscribeLocalState, updateLocalUser } from "./localStore.js";
-
-const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
-const geminiModel = import.meta.env.VITE_GEMINI_MODEL || "gemini-1.5-flash";
-
-function hasGeminiKey() {
-  return Boolean(geminiApiKey);
-}
-
-function parseGeminiJson(text) {
-  const cleaned = text
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-  return JSON.parse(cleaned);
-}
-
-async function callGeminiJson(prompt, fallbackValue) {
-  if (!hasGeminiKey()) return fallbackValue;
-
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.35,
-            responseMimeType: "application/json",
-          },
-        }),
-      },
-    );
-
-    if (!response.ok) throw new Error(`Gemini request failed: ${response.status}`);
-    const payload = await response.json();
-    const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("Gemini returned no text.");
-    return parseGeminiJson(text);
-  } catch (error) {
-    console.warn(error);
-    return fallbackValue;
-  }
-}
+import {
+  generateLearningCourse as generateLearningCourseFn,
+  aiTutorChat as aiTutorChatFn,
+  generateQuestionHint as generateQuestionHintFn,
+  explainWrongAnswer as explainWrongAnswerFn,
+} from "./aiFunctionsService.js";
 
 function localList(uid, name) {
   return getLocalUser(uid)?.[name] || [];
@@ -352,48 +312,17 @@ function writeGeminiCourse(uid, generated, sourceFileId = null) {
 }
 
 async function buildGeminiCourse(uid, sourceText, sourceFileId = null) {
-  const prompt = `Create structured active-recall learning content from these notes.
-Return strict JSON only with this exact shape:
-{
-  "subjects": [
-    {
-      "title": "string",
-      "description": "string",
-      "units": [
-        {
-          "title": "string",
-          "summary": "string",
-          "lessons": [
-            {
-              "title": "string",
-              "summary": "string",
-              "difficulty": "easy|medium|hard",
-              "keyPoints": ["string"],
-              "questions": [
-                {
-                  "prompt": "string",
-                  "options": ["A", "B", "C", "D"],
-                  "correctAnswer": "must exactly match one option",
-                  "explanation": "string",
-                  "topic": "string",
-                  "difficulty": "easy|medium|hard"
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-Create concise lessons, 3-5 recall questions per lesson, and only use facts grounded in the notes.
+  if (!isFirebaseConfigured) {
+    return buildLocalCourse(uid, sourceText, sourceFileId);
+  }
 
-NOTES:
-${sourceText}`;
-
-  const fallback = null;
-  const generated = await callGeminiJson(prompt, fallback);
-  return generated ? writeGeminiCourse(uid, generated, sourceFileId) : buildLocalCourse(uid, sourceText, sourceFileId);
+  try {
+    const generated = await generateLearningCourseFn(sourceText, sourceFileId);
+    return writeGeminiCourse(uid, generated, sourceFileId);
+  } catch (error) {
+    console.warn("Cloud Function failed, using local fallback:", error);
+    return buildLocalCourse(uid, sourceText, sourceFileId);
+  }
 }
 
 async function writeFirebaseCourse(uid, generated, sourceFileId = null) {
@@ -482,47 +411,14 @@ async function writeFirebaseCourse(uid, generated, sourceFileId = null) {
 }
 
 async function buildFirebaseGeminiCourse(uid, sourceText, sourceFileId = null) {
-  const prompt = `Create structured active-recall learning content from these notes.
-Return strict JSON only with this exact shape:
-{
-  "subjects": [
-    {
-      "title": "string",
-      "description": "string",
-      "units": [
-        {
-          "title": "string",
-          "summary": "string",
-          "lessons": [
-            {
-              "title": "string",
-              "summary": "string",
-              "difficulty": "easy|medium|hard",
-              "keyPoints": ["string"],
-              "questions": [
-                {
-                  "prompt": "string",
-                  "options": ["A", "B", "C", "D"],
-                  "correctAnswer": "must exactly match one option",
-                  "explanation": "string",
-                  "topic": "string",
-                  "difficulty": "easy|medium|hard"
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-Create concise lessons, 3-5 recall questions per lesson, and only use facts grounded in the notes.
-
-NOTES:
-${sourceText}`;
-
-  const generated = await callGeminiJson(prompt, fallbackCourseJson(sourceText));
-  return writeFirebaseCourse(uid, generated, sourceFileId);
+  try {
+    const generated = await generateLearningCourseFn(sourceText, sourceFileId);
+    return writeFirebaseCourse(uid, generated, sourceFileId);
+  } catch (error) {
+    console.warn("Cloud Function failed, using fallback:", error);
+    const fallback = fallbackCourseJson(sourceText);
+    return writeFirebaseCourse(uid, fallback, sourceFileId);
+  }
 }
 
 export function subscribeUserCollection(uid, name, callback, constraints = []) {
@@ -637,22 +533,14 @@ export async function processRawNotes(uid, text) {
 export async function askTutor(messages, context) {
   if (!isFirebaseConfigured) {
     const last = messages[messages.length - 1]?.content || "";
-    return callGeminiJson(
-      `You are LockOn Revision's AI tutor. Be concise, helpful, and active-recall focused.
-Return JSON only: {"reply":"string"}
-
-Conversation:
-${messages.map((message) => `${message.role}: ${message.content}`).join("\n")}`,
-      {
+    return {
       reply:
         last.length > 0
           ? `Local tutor: ${last} connects back to your uploaded lessons. Try answering it as a question first, then compare against your lesson summaries.`
           : "Local tutor ready. Ask about a topic from your notes.",
-      },
-    );
+    };
   }
-  const result = await httpsCallable(functions, "aiTutorChat")({ messages, context });
-  return result.data;
+  return aiTutorChatFn(messages, context);
 }
 
 export async function getHint(questionId) {
@@ -663,16 +551,9 @@ export async function getHint(questionId) {
     const fallback = question
       ? `Look for the option that directly matches: ${question.topic}.`
       : "Eliminate the least relevant options first.";
-    const result = await callGeminiJson(
-      `Return JSON only: {"hint":"one short hint that helps without revealing the answer"}
-Question:
-${JSON.stringify(question)}`,
-      { hint: fallback },
-    );
-    return result.hint;
+    return fallback;
   }
-  const result = await httpsCallable(functions, "generateQuestionHint")({ questionId });
-  return result.data.hint;
+  return generateQuestionHintFn(questionId);
 }
 
 export async function explainWrongAnswer(questionId, selectedAnswer) {
@@ -683,17 +564,9 @@ export async function explainWrongAnswer(questionId, selectedAnswer) {
     const fallback = question
       ? `"${selectedAnswer}" is not the best match. The answer is "${question.correctAnswer}" because it is grounded in the uploaded lesson.`
       : "Review the lesson summary, then retry the question.";
-    const result = await callGeminiJson(
-      `Return JSON only: {"explanation":"brief explanation of why the selected answer is wrong and why the correct answer is right"}
-Selected answer: ${selectedAnswer}
-Question:
-${JSON.stringify(question)}`,
-      { explanation: fallback },
-    );
-    return result.explanation;
+    return fallback;
   }
-  const result = await httpsCallable(functions, "explainWrongAnswer")({ questionId, selectedAnswer });
-  return result.data.explanation;
+  return explainWrongAnswerFn(questionId, selectedAnswer);
 }
 
 export async function recordAnswer(uid, question, selectedAnswer) {

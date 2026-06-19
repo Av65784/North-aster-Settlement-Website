@@ -14,7 +14,7 @@ import {
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
 import { db, isFirebaseConfigured, storage } from "../config/firebase.js";
-import { callGeminiJson } from "./geminiService.js";
+import { generateForgeStructure as generateForgeStructureFn, forgeAssistantChat as forgeAssistantChatFn } from "./aiFunctionsService.js";
 import { getLocalUser, makeId, subscribeLocalState, updateLocalUser } from "./localStore.js";
 
 const FORGE_PROMPT = `Analyze the study material and create a structured learning path.
@@ -246,8 +246,19 @@ function flattenStructure(subjectInput, sourceFileIds = [], sourceText = "") {
 }
 
 async function generateStructureFromText(sourceText) {
-  const generated = await callGeminiJson(`${FORGE_PROMPT}${sourceText}`, buildFallbackStructure(sourceText));
-  return normalizeGeneratedStructure(generated);
+  if (!isFirebaseConfigured) {
+    const fallback = buildFallbackStructure(sourceText);
+    return normalizeGeneratedStructure(fallback);
+  }
+
+  try {
+    const generated = await generateForgeStructureFn(sourceText);
+    return normalizeGeneratedStructure(generated);
+  } catch (error) {
+    console.warn("Cloud Function failed, using fallback:", error);
+    const fallback = buildFallbackStructure(sourceText);
+    return normalizeGeneratedStructure(fallback);
+  }
 }
 
 function assembleForgeTree(subject, units, subUnits, lessons) {
